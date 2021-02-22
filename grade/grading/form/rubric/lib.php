@@ -809,12 +809,43 @@ class gradingform_rubric_instance extends gradingform_instance {
     }
 
     /**
+     * Called when teacher submits the grading form:
+     * updates the instance in DB, marks it as ACTIVE and returns the grade to be pushed to the gradebook.
+     * $itemid must be specified here (it was not required when the instance was
+     * created, because it might not existed in draft)
+     * 
+     * This override only marks it as ACTIVE if it has been completely filled in, otherwise
+     * the DB is updated, but it remains incomplete.
+     *
+     * @param array $elementvalue
+     * @param int $itemid
+     * @return int the grade on 0-100 scale
+     */
+    public function submit_and_get_grade($elementvalue, $itemid) {
+        $elementvalue['itemid'] = $itemid;
+        if ($this->is_empty_form($elementvalue)) {
+            $this->clear_attempt($elementvalue);
+            $this->make_active();
+            return -1;
+        }
+
+        $this->update($elementvalue);
+        if ($this->is_grading_complete($elementvalue)){
+            $this->make_active();
+            return $this->get_grade();
+        }
+        else {
+            return -1;
+        }
+    }
+
+    /**
      * Validates that rubric is fully completed and contains valid grade on each criterion
      *
      * @param array $elementvalue value of element as came in form submit
      * @return boolean true if the form data is validated and contains no errors
      */
-    public function validate_grading_element($elementvalue) {
+    public function is_grading_complete($elementvalue) {
         $criteria = $this->get_controller()->get_definition()->rubric_criteria;
         if (!isset($elementvalue['criteria']) || !is_array($elementvalue['criteria']) || sizeof($elementvalue['criteria']) < sizeof($criteria)) {
             return false;
@@ -867,10 +898,14 @@ class gradingform_rubric_instance extends gradingform_instance {
                 $DB->insert_record('gradingform_rubric_fillings', $newrecord);
             } else {
                 $newrecord = array('id' => $currentgrade['criteria'][$criterionid]['id']);
+                $values_removed = 0;
                 foreach (array('levelid', 'remark'/*, 'remarkformat' */) as $key) {
                     // TODO MDL-31235 format is not supported yet
                     if (isset($record[$key]) && $currentgrade['criteria'][$criterionid][$key] != $record[$key]) {
                         $newrecord[$key] = $record[$key];
+                    }
+                    else if (!isset($record[$key]) && isset($currentgrade['criteria'][$criterionid][$key])) {
+                        $newrecord[$key] = null;
                     }
                 }
                 if (count($newrecord) > 1) {
@@ -951,7 +986,8 @@ class gradingform_rubric_instance extends gradingform_instance {
         $html = '';
         if ($value === null) {
             $value = $this->get_rubric_filling();
-        } else if (!$this->validate_grading_element($value)) {
+        }
+        if (!$this->is_grading_complete($value) && !$this->is_empty_form($value)) {
             $html .= html_writer::tag('div', get_string('rubricnotcompleted', 'gradingform_rubric'), array('class' => 'gradingform_rubric-error'));
         }
         $currentinstance = $this->get_current_instance();
